@@ -13,7 +13,7 @@ import traceback
 class Plugin(BasePlugin):
     wp = WriterProperties(compression="ZSTD", compression_level=9)
     
-    def initialize(self, plugin_config: Dict[str, Any]):
+    def initialize(self, plugin_config: Dict[str, Any])->None:
         self.plugin_config = plugin_config
         
     def __delta_conn_opt(self, region:str, storage:str)->Dict[str, str]:
@@ -34,7 +34,7 @@ class Plugin(BasePlugin):
             "AWS_STORAGE_ALLOW_HTTP": "True",
         }
     
-    def load(self, source_config: SourceConfig):
+    def load(self, source_config: SourceConfig)->Any:
         storage = source_config.get("storage")
         region = source_config.get("region")
         if storage is None or region is None:
@@ -59,7 +59,7 @@ class Plugin(BasePlugin):
             # recordbatch
             raise NotImplementedError("Only deltalake in minio is supported")
 
-    def store(self, target_config: TargetConfig):
+    def store(self, target_config: TargetConfig)->None:
         
         region = target_config.config.get("region")
         storage = target_config.config.get("storage")
