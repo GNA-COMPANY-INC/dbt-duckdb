@@ -2,27 +2,44 @@ from typing import Any
 from typing import Dict
 
 from deltalake import DeltaTable, write_deltalake, WriterProperties
-
+from duckdb import DuckDBPyConnection
 from . import BasePlugin
 from ..utils import SourceConfig
 from ..utils import TargetConfig
 from . import pd_utils
 import traceback
+import os
 
-# GNA-COMPANY custom plugin
+# ======== GNA-COMPANY custom plugin for dbt-duckdb ========
+# - made to supports multi-source read and multi-target write
+
+# ==== changelog ====
+# - 2024-08-20 
+#   - init fork: https://github.com/GNA-COMPANY-INC/dbt-duckdb
+#   - support deltalake table from minio: both read and write
+
+# - 2024-09-23 update
+#   - support mysql table: read and write
+#   - support local file: write
+#   - tested dbt-python-model functionality
+
 class Plugin(BasePlugin):
     wp = WriterProperties(compression="ZSTD", compression_level=9)
     
     def initialize(self, plugin_config: Dict[str, Any])->None:
         self.plugin_config = plugin_config
-        
+            
+    def configure_connection(self, conn: DuckDBPyConnection)->None:
+        self.conn = conn        
+                    
     def __delta_conn_opt(self, region:str, storage:str)->Dict[str, str]:
-        conn = self.plugin_config[region][storage]
-        host = conn.get("host")
-        port = conn.get("port")
-        access_key = conn.get("access_key")
-        secret_key = conn.get("secret_key")
-        region_str = conn.get("s3_region", "")
+        __opt = self.plugin_config[region][storage]
+        
+        host = __opt.get("host")
+        port = __opt.get("port")
+        access_key = __opt.get("access_key")
+        secret_key = __opt.get("secret_key")
+        region_str = __opt.get("s3_region", "")
         return {
             "aws_endpoint": f"http://{host}:{port}",
             "aws_access_key_id": access_key,
@@ -33,20 +50,50 @@ class Plugin(BasePlugin):
             "AWS_S3_ALLOW_UNSAFE_RENAME": "True",
             "AWS_STORAGE_ALLOW_HTTP": "True",
         }
-    
+        
+    def __rds_conn_opt(self, region:str, storage:str)->Dict[str, str]:
+        __opt = self.plugin_config[region][storage]
+        
+        host = __opt.get("host")
+        port = __opt.get("port")
+        user = __opt.get("user")
+        password = __opt.get("password")
+        
+        return {
+            "host": host,
+            "port": port,
+            "user": user,
+            "password": password,
+        }
+
+    def __attach_to_rds(self, storage_options:Dict, scheme:str, table_name:str)->str:
+        h = storage_options.get("host")
+        u = storage_options.get("user")
+        p = storage_options.get("port")
+        pwd = storage_options.get("password")
+        db_alias = f"{scheme}_{table_name}"     
+        self.conn.execute(
+            f"ATTACH 'host={h} user={u} port={p} password={pwd} database={scheme}' AS {db_alias} (TYPE MYSQL);"
+        )
+        self.conn.execute(f"USE {db_alias};")   
+        print(f"connected to rds: table: {table_name}")
+        return db_alias
+        
+        
     def load(self, source_config: SourceConfig)->Any:
+        print(f"loading source_config: {source_config}")
         storage = source_config.get("storage")
         region = source_config.get("region")
         if storage is None or region is None:
             raise Exception("storage and region are required arguments")
-
-        if storage == "minio":        
+        storage_type = self.plugin_config[region][storage].get("type")
+        
+        if storage_type == "delta":        
             storage_options = self.__delta_conn_opt(region, storage)
             if "delta_table_path" not in source_config:
                 raise Exception("'delta_table_path' is a required argument for the delta table")
-
             table_path = source_config["delta_table_path"]
-            
+            print(f"loading from minio deltalake table: {region}.{storage}.{table_path}")
             if storage_options:
                 dt = DeltaTable(table_path, storage_options=storage_options)
             else:
@@ -55,32 +102,47 @@ class Plugin(BasePlugin):
             df = dt.to_pyarrow_dataset()
             return df
         
+        elif storage_type == "rds":
+            table_name = source_config.get("table")
+            scheme = source_config.get("scheme")
+            if table_name is None or scheme is None:
+                raise Exception("table and scheme are required arguments for rds")
+            storage_options = self.__rds_conn_opt(region, storage)
+            self.__attach_to_rds(storage_options, scheme, table_name)
+            print(f"loading from rds table: {region}.{storage}.{table_name}")
+            rel =  self.conn.table(table_name=table_name).fetch_arrow_reader()
+            return rel
+            
         else:
-            # recordbatch
             raise NotImplementedError("Only deltalake in minio is supported")
+
 
     def store(self, target_config: TargetConfig)->None:
         
         region = target_config.config.get("region")
         storage = target_config.config.get("storage")
+        storage_type = self.plugin_config[region][storage].get("type")
         if storage is None or region is None:
             raise Exception("storage and region are required arguments")
         
-        if storage == "minio":
+        if storage_type == "delta":        
             storage_options = self.__delta_conn_opt(region, storage)
+            print(f"store storage_options: {storage_options}")
             bucket = target_config.config.get("bucket")
             dataset_name = target_config.config.get("dataset_name")
             partition_col = target_config.config.get("partition_col", None)
             if not bucket or not dataset_name:
                 raise Exception(f"bucket: {bucket} and dataset_name: {dataset_name} are both required")
+            print(f"storing to minio: {region}.{storage} s3://{bucket}/{dataset_name}")
             df = pd_utils.target_to_df(target_config)
+            print(f"df:\n{df}")
             try:
                 write_deltalake(
                     f"s3://{bucket}/{dataset_name}",
                     data=df,
                     schema=None,
                     partition_by=partition_col,
-                    name="test_dbt",
+                    name=dataset_name,
                     description="",
                     storage_options=storage_options,
                     mode="append",
@@ -88,11 +150,69 @@ class Plugin(BasePlugin):
                     engine="rust",
                     custom_metadata=None,
                 )
-                
+                print(f"saved to minio: {region}.{storage} s3://{bucket}/{dataset_name}")
             except Exception:
-                raise Exception(f"Failed to save datasource {traceback.format_exc()}")        
+                msg = f"Failed to save datasource {traceback.format_exc()}"
+                print(msg)
+                raise Exception(msg)
+            
+        elif storage_type == "rds":
+            scheme = target_config.config.get("scheme")
+            table_name = target_config.config.get("table")
+            if table_name is None or scheme is None:
+                raise Exception("table and scheme are required arguments for rds")
+            storage_options = self.__rds_conn_opt(region, storage)
+            db_alias = self.__attach_to_rds(storage_options, scheme, table_name)
+            print(f"storing to rds table: {region}.{storage} {scheme}.{table_name}")
+            df = pd_utils.target_to_df(target_config)
+            print(f"df:\n{df}")
+            cols = df.columns
+            col_str = ", ".join(cols)
+            vals = []
+            for _,row in df.iterrows():
+                vals_str = ", ".join([f"''{v}''" for v in row])
+                vals.append(f"({vals_str})")
+            
+            q = f"""
+                insert into
+                {scheme}.{table_name}
+                ({col_str})
+                values
+                {", ".join(vals)}
+                on duplicate key update
+                {", ".join([f"{c}=values({c})" for c in cols])}
+            """
+                        
+            q = f"""
+            CALL mysql_execute('{db_alias}', '{q}');
+            """
+            
+            self.conn.execute(q)
+            print(f"inserted to rds table: {scheme}.{table_name}, row count: {len(df)}")
+            
+        elif storage_type == "local":
+            df = pd_utils.target_to_df(target_config)
+            print(f"df:\n{df}")
+            root = self.plugin_config[region][storage].get("root")
+            path = target_config.config.get("file_name")
+            path = os.path.join(root, path)
+            if path.endswith(".csv"):
+                if os.path.exists(path):
+                    os.remove(path)                
+                df.to_csv(path, index=False)
+            elif path.endswith(".parquet"):
+                if os.path.exists(path):
+                    os.remove(path)
+                df.to_parquet(path, index=False)
+            else:
+                raise Exception(f"Unsupported format: {path}")
+            print(f"saved to local path: {path}")
+        elif storage_type == "ref":
+            df = pd_utils.target_to_df(target_config)
+            print(f"df:\n{df}")
+            pass 
         else:
-            raise NotImplementedError("Only delta format is supported")
+            raise NotImplementedError("unsupported storage type")
         
     def default_materialization(self):
         return "view"
