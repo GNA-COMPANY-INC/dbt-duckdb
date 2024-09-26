@@ -57,7 +57,12 @@ class Plugin(BasePlugin):
             
     def configure_connection(self, conn: DuckDBPyConnection)->None:
         self.conn = conn        
-                    
+        
+        def current_datetime_local(fmt:str, days:int=0)->str:
+            return (datetime.datetime.now() + datetime.timedelta(days=days)).strftime(fmt)
+        
+        self.conn.create_function(name="current_datetime_local", function=current_datetime_local)
+        
     def __delta_conn_opt(self, region:str, storage:str)->Dict[str, str]:
         __opt = self.plugin_config[region][storage]
         
