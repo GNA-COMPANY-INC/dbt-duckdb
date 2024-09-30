@@ -136,9 +136,9 @@ class Plugin(BasePlugin):
                 elif isinstance(df[column].iloc[0], datetime.datetime):
                     mysql_type = self.__rds_default_dtypes['datetime.datetime']
                 elif pandas.api.types.is_integer_dtype(dtype):
-                    mysql_type = self.__rds_default_dtypes['int']
+                    mysql_type = self.__rds_default_dtypes['int64']
                 elif pandas.api.types.is_float_dtype(dtype):
-                    mysql_type = self.__rds_default_dtypes['float']
+                    mysql_type = self.__rds_default_dtypes['float64']
                 else:
                     max_data_len = df[column].apply(lambda x: len(str(x))).max() * 2
                     
