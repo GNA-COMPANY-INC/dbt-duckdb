@@ -29,6 +29,10 @@ from typing import List
 #   - create table if not exists for rds
 #   - support unique_cols and index_cols for rds
 
+# - 2024-10-02 update
+#   - block read from rds due to performance issue. use query python model instead
+#   - block auto generate table for rds. print ddl instead
+
 class Plugin(BasePlugin):
     wp = WriterProperties(compression="ZSTD", compression_level=9)
     
@@ -113,7 +117,7 @@ class Plugin(BasePlugin):
         return db_alias
     
     
-    def __create_table_if_needed(self, scheme:str, table_name:str, db_alias:str, df:pandas.DataFrame, uniq_cols:List[str]|str=None, index_cols:List[str]|str=None)->bool:
+    def __create_table_if_needed(self, scheme:str, table_name:str, db_alias:str, df:pandas.DataFrame, uniq_cols:List[str]|str=None, index_cols:List[str]|str=None)->str:
         
         info_q = f"""
                 select TABLE_NAME 
@@ -123,7 +127,6 @@ class Plugin(BasePlugin):
         info_q = f"""
             select * from mysql_query('{db_alias}', '{info_q}');
         """
-        
         
         if len(self.conn.execute(info_q).fetchall()) == 0:
             print(f"table {scheme}.{table_name} does not exist, creating...")
@@ -156,16 +159,15 @@ class Plugin(BasePlugin):
                 
             ddl_cols_str = ",\n".join(ddl_cols)
             create_q = f"""
-                CREATE TABLE {scheme}.{table_name} (
-                    {ddl_cols_str}
-                ); 
-            """
+CREATE TABLE {scheme}.{table_name} (
+    {ddl_cols_str}
+); 
+"""
             print(f"create ddl: {create_q}")
-            create_q = f"""
-                CALL mysql_execute('{db_alias}', '{create_q}');
-            """
-            self.conn.execute(create_q)
-            
+            # create_q = f"""
+            #     CALL mysql_execute('{db_alias}', '{create_q}');
+            # """
+            # self.conn.execute(create_q)
             
             index_ddl = [
                 f"create index idx_created on {scheme}.{table_name} (created);",
@@ -179,16 +181,18 @@ class Plugin(BasePlugin):
                     _ddl = f"create index idx_{idx} on {scheme}.{table_name} ({idx});"
                     index_ddl.append(_ddl)
                 
-            index_ddl_str = "\n".join(index_ddl)
-            index_q = f"""
-                CALL mysql_execute('{db_alias}', '{index_ddl_str}'); 
-            """
-            self.conn.execute(index_q)
+            index_q = "\n".join(index_ddl)
+            # index_q = f"""
+            #     CALL mysql_execute('{db_alias}', '{index_q}'); 
+            # """
+            # self.conn.execute(index_q)
             print(f"created table: {scheme}.{table_name}")
-            return True
+            
+            ddl = f"{create_q}{index_q}"
+            return ddl
         else:
             print(f"table {scheme}.{table_name} already exists")
-            return False
+            return None
                     
         
     def load(self, source_config: SourceConfig)->Any:
@@ -214,6 +218,7 @@ class Plugin(BasePlugin):
             return df
         
         elif storage_type == "rds":
+            raise NotImplementedError("Only deltalake in minio is supported")
             table_name = source_config.get("table")
             scheme = source_config.get("scheme")
             if table_name is None or scheme is None:
@@ -282,7 +287,10 @@ class Plugin(BasePlugin):
             
             uniq_cols = target_config.config.get("unique_cols", None)
             index_cols = target_config.config.get("index_cols", None)
-            self.__create_table_if_needed(scheme, table_name, db_alias, df, uniq_cols, index_cols)
+            ddl = self.__create_table_if_needed(scheme, table_name, db_alias, df, uniq_cols, index_cols)
+            if ddl is not None:
+                print(f"CREATE TABLE FIRST IN {region} {storage}:\n========== DDL ==========\n{ddl}\n=========================")
+                return
             
             cols = df.columns
             col_str = ", ".join(cols)
