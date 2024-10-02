@@ -163,7 +163,7 @@ CREATE TABLE {scheme}.{table_name} (
     {ddl_cols_str}
 ); 
 """
-            print(f"create ddl: {create_q}")
+            
             # create_q = f"""
             #     CALL mysql_execute('{db_alias}', '{create_q}');
             # """
