@@ -33,6 +33,9 @@ from typing import List
 #   - block read from rds due to performance issue. use query python model instead
 #   - block auto generate table for rds. print ddl instead
 
+# - 2024-10-17 fix
+#   - set default_collation
+
 class Plugin(BasePlugin):
     wp = WriterProperties(compression="ZSTD", compression_level=9)
     
@@ -62,7 +65,8 @@ class Plugin(BasePlugin):
         self.plugin_config = plugin_config
             
     def configure_connection(self, conn: DuckDBPyConnection)->None:
-        self.conn = conn        
+        self.conn = conn   
+        self.conn.execute(f"SET default_collation = 'nocase';")     
         
         def current_datetime_local(fmt:str, days:int=0)->str:
             return (datetime.datetime.now() + datetime.timedelta(days=days)).strftime(fmt)
@@ -117,7 +121,7 @@ class Plugin(BasePlugin):
         return db_alias
     
     
-    def __create_table_if_needed(self, scheme:str, table_name:str, db_alias:str, df:pandas.DataFrame, uniq_cols:List[str]|str=None, index_cols:List[str]|str=None)->str:
+    def __create_ddl_if_needed(self, scheme:str, table_name:str, db_alias:str, df:pandas.DataFrame, uniq_cols:List[str]|str=None, index_cols:List[str]|str=None)->str:
         
         info_q = f"""
                 select TABLE_NAME 
@@ -287,7 +291,7 @@ CREATE TABLE {scheme}.{table_name} (
             
             uniq_cols = target_config.config.get("unique_cols", None)
             index_cols = target_config.config.get("index_cols", None)
-            ddl = self.__create_table_if_needed(scheme, table_name, db_alias, df, uniq_cols, index_cols)
+            ddl = self.__create_ddl_if_needed(scheme, table_name, db_alias, df, uniq_cols, index_cols)
             if ddl is not None:
                 print(f"CREATE TABLE FIRST IN {region} {storage}:\n========== DDL ==========\n{ddl}\n=========================")
                 return
