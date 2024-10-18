@@ -66,7 +66,8 @@ class Plugin(BasePlugin):
             
     def configure_connection(self, conn: DuckDBPyConnection)->None:
         self.conn = conn   
-        self.conn.execute(f"SET default_collation = 'nocase';")     
+        self.conn.execute(f"SET default_collation = 'nocase';")  
+        self.conn.execute(f"SET enable_progress_bar = true;")   
         
         def current_datetime_local(fmt:str, days:int=0)->str:
             return (datetime.datetime.now() + datetime.timedelta(days=days)).strftime(fmt)
