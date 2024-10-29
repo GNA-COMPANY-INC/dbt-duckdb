@@ -159,7 +159,7 @@ class Plugin(BasePlugin):
             if uniq_cols is not None:
                 if isinstance(uniq_cols, str):
                     uniq_cols = [uniq_cols]
-                _unq_ddl = f"constraint uq_{table_name}_{'_'.join(uniq_cols)} unique ({', '.join(uniq_cols)})"
+                _unq_ddl = f"constraint uq_{table_name}_{'_'.join([c[0] for c in uniq_cols])} unique ({', '.join(uniq_cols)})"
                 ddl_cols.append(_unq_ddl)
                 
             ddl_cols_str = ",\n".join(ddl_cols)
