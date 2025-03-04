@@ -257,6 +257,10 @@ CREATE TABLE {scheme}.{table_name} (
             print(f"storing to minio: {region}.{storage} s3://{bucket}/{dataset_name}")
             df = pd_utils.target_to_df(target_config)
             print(f"df:\n{df}")
+            if len(df) == 0:
+                print("WARNING: empty dataframe, skipping insert. . .")
+                return
+                        
             try:
                 write_deltalake(
                     f"s3://{bucket}/{dataset_name}",
@@ -289,6 +293,10 @@ CREATE TABLE {scheme}.{table_name} (
             
             df = pd_utils.target_to_df(target_config)
             print(f"df:\n{df}")
+            
+            if len(df) == 0:
+                print("WARNING: empty dataframe, skipping insert. . .")
+                return
             
             uniq_cols = target_config.config.get("unique_cols", None)
             index_cols = target_config.config.get("index_cols", None)
@@ -325,6 +333,10 @@ CREATE TABLE {scheme}.{table_name} (
         elif storage_type == "local":
             df = pd_utils.target_to_df(target_config)
             print(f"df:\n{df}")
+            if len(df) == 0:
+                print("WARNING: empty dataframe, skipping insert. . .")
+                return
+                        
             root = self.plugin_config[region][storage].get("root")
             path = target_config.config.get("file_name")
             path = os.path.join(root, path)
